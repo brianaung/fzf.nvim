@@ -1,10 +1,20 @@
 local M = {}
 
+M.fzf_args = {
+	"--ansi",
+	"--multi",
+	"--reverse",
+	"--bind='ctrl-q:select-all+accept'",
+}
+
 --- Execute fuzzy operation in a terminal session.
 ---@param name string
----@param cmd string
+---@param choice_cmd string
 ---@param on_choice function
-function M.fuzzy(name, cmd, on_choice)
+function M.fzf(name, choice_cmd, on_choice)
+	M.fzf_args = vim.tbl_deep_extend("force", M.fzf_args, vim.g.fzf_args or {})
+	vim.validate("fzf_args", M.fzf_args, "table")
+
 	-- Opens an ivy-mode like floating window.
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	vim.bo[bufnr].bufhidden = "wipe"
@@ -32,11 +42,12 @@ function M.fuzzy(name, cmd, on_choice)
 	})
 
 	local tmpfile = vim.fn.tempname()
+	local fuzzy_cmd = "fzf " .. table.concat(M.fzf_args, " ")
 	vim.api.nvim_buf_call(bufnr, function()
 		vim.fn.termopen({
 			vim.o.shell,
 			vim.o.shellcmdflag,
-			string.format('%s > "%s"', cmd, tmpfile),
+			string.format('%s | %s > "%s"', choice_cmd, fuzzy_cmd, tmpfile),
 		}, {
 			on_exit = function()
 				local f = io.open(tmpfile)
@@ -48,7 +59,7 @@ function M.fuzzy(name, cmd, on_choice)
 					on_choice(choices)
 				end
 				f:close()
-				-- TODO os.remove(tmpfile)
+				os.remove(tmpfile)
 			end,
 		})
 	end)
@@ -57,7 +68,7 @@ end
 --- Find files in cwd.
 ---@return nil
 function M.files()
-	M.fuzzy("Files", "fd --type=file | fzf --reverse --multi --bind='ctrl-q:select-all+accept'", function(choices)
+	M.fzf("Files", "fd --type=file", function(choices)
 		if #choices > 1 then
 			M._setqflist(choices)
 		else
@@ -81,21 +92,17 @@ function M.live_grep()
 		}
 	end
 
-	M.fuzzy(
-		"Live grep",
-		"rg --column --color=always '' | fzf --ansi --reverse --multi --bind='ctrl-q:select-all+accept'",
-		function(choices)
-			if #choices > 1 then
-				M._setqflist(choices, parser)
-			else
-				local parsed = parser(choices[1])
-				vim.cmd("edit +" .. parsed.lnum .. " " .. parsed.filename)
-			end
+	M.fzf("Live grep", "rg --column --color=always ''", function(choices)
+		if #choices > 1 then
+			M._setqflist(choices, parser)
+		else
+			local parsed = parser(choices[1])
+			vim.cmd("edit +" .. parsed.lnum .. " " .. parsed.filename)
 		end
-	)
+	end)
 end
 
---- Find active buffer files.
+--- Find "buflisted" buffer files.
 ---@return nil
 function M.buffers()
 	local buffers = vim.fn.getbufinfo { buflisted = 1 }
@@ -114,27 +121,23 @@ function M.buffers()
 		end)
 		:totable())
 
-	M.fuzzy(
-		"Buffers",
-		string.format("cat %s | fzf --reverse --multi --bind='ctrl-q:select-all+accept'", tmpfile),
-		function(choices)
-			if #choices > 1 then
-				M._setqflist(choices, function(c)
-					local _, buf = vim.iter(ipairs(buffers)):find(function(_, b)
-						return b.bufnr == tonumber(c:match "^%[(%d+)%]")
-					end)
-					return buf and {
-						bufnr = buf.bufnr,
-						lnum = buf.lnum,
-						col = 1,
-					} or {}
+	M.fzf("Buffers", string.format("cat %s", tmpfile), function(choices)
+		if #choices > 1 then
+			M._setqflist(choices, function(c)
+				local _, buf = vim.iter(ipairs(buffers)):find(function(_, b)
+					return b.bufnr == tonumber(c:match "^%[(%d+)%]")
 				end)
-			else
-				vim.cmd.buffer(choices[1]:match "^%[(%d+)%]")
-			end
-			-- TODO os.remove(tmpfile)
+				return buf and {
+					bufnr = buf.bufnr,
+					lnum = buf.lnum,
+					col = 1,
+				} or {}
+			end)
+		else
+			vim.cmd.buffer(choices[1]:match "^%[(%d+)%]")
 		end
-	)
+		os.remove(tmpfile)
+	end)
 end
 
 --- Find neovim help tags.
@@ -153,18 +156,14 @@ function M.help_tags()
 		end)
 		:totable())
 
-	M.fuzzy(
-		"Help tags",
-		string.format("cat %s | fzf --reverse --multi --bind='ctrl-q:select-all+accept'", tmpfile),
-		function(choices)
-			if #choices > 1 then
-				M._setqflist(choices)
-			else
-				vim.cmd.help(choices[1])
-			end
-			-- TODO os.remove(tmpfile)
+	M.fzf("Help tags", string.format("cat %s", tmpfile), function(choices)
+		if #choices > 1 then
+			M._setqflist(choices)
+		else
+			vim.cmd.help(choices[1])
 		end
-	)
+		os.remove(tmpfile)
+	end)
 end
 
 function M._setqflist(choices, parser)
